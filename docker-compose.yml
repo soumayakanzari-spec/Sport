@@ -1,0 +1,265 @@
+services:
+  postgres:
+    container_name: postgres_container
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      PGDATA: /data/postgres
+    volumes:
+      - postgres:/data/postgres
+    ports:
+      - "5432:5432"
+    networks:
+      - backend
+    command:
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    restart: unless-stopped
+
+  pgadmin:
+    container_name: pgadmin_container
+    image: dpage/pgadmin4:6
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-pgadmin4@pgadmin.org}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  python:
+    container_name: python_container
+    build: ./app
+    depends_on:
+      - postgres
+      - debezium
+    environment:
+      DB_HOST: postgres
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    networks:
+      - backend
+    restart: unless-stopped
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.2
+    container_name: redpanda_container
+    command:
+      - redpanda
+      - start
+      - --advertise-kafka-addr=redpanda:9092
+      - --kafka-addr=0.0.0.0:9092
+      - --advertise-rpc-addr=redpanda:33145
+      - --rpc-addr=0.0.0.0:33145
+      - --overprovisioned
+      - --smp 1
+      - --memory 512M
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: redpanda_console
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    ports:
+      - "8081:8080"
+    depends_on:
+      - redpanda
+    networks:
+      - backend
+    restart: unless-stopped
+
+  debezium:
+    image: debezium/connect:2.5
+    container_name: debezium_container
+    depends_on:
+      - postgres
+      - redpanda
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=redpanda:9092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+      - STATUS_STORAGE_TOPIC=my_connect_statuses
+      - KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - PLUGIN_PATH=/kafka/connect,/debezium-connector
+      - CONNECT_TOPIC_CREATION_ENABLE=true
+      - CONNECT_TOPIC_CREATION_GROUPS=postgres_connector
+      - CONNECT_TOPIC_CREATION_POSTGRES_GROUP_INCLUDE=postgres_server.public.employee_primes,postgres_server.public.sport_activities
+    networks:
+      - backend
+    restart: unless-stopped
+
+  spark_consumer:
+    build:
+      context: .
+      dockerfile: consumer.Dockerfile
+    volumes:
+      - ./data:/data
+      - ./write_to_delta.py:/app/write_to_delta.py
+    depends_on:
+      - redpanda
+    networks:
+      - backend
+    restart: always
+
+  spark_ref:
+    build:
+      context: .
+      dockerfile: ref.Dockerfile
+    volumes:
+      - ./data:/data
+      - ./powerbi_export:/data/powerbi_export 
+      - ./Donnees_RH.xlsx:/app/Donnees_RH.xlsx
+      - ./Donnees_Sportive.xlsx:/app/Donnees_Sportive.xlsx
+      - ./spark_ref.py:/app/ref.py
+    environment:
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    depends_on:
+      - spark_consumer
+    networks:
+      - backend
+
+  spark_ref_with_map:
+    build:
+      context: .
+      dockerfile: ref_with_map.Dockerfile
+    volumes:
+      - ./data:/data
+      - ./powerbi_export:/data/powerbi_export 
+      - ./Donnees_RH.xlsx:/app/Donnees_RH.xlsx
+      - ./Donnees_Sportive.xlsx:/app/Donnees_Sportive.xlsx
+    environment:
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    depends_on:
+      - spark_consumer
+    networks:
+      - backend
+
+  python-slack-consumer:
+    build:
+      context: .
+      dockerfile: consumer_slack.Dockerfile
+    container_name: python_slack_consumer
+    environment:
+      - REDPANDA_BROKERS=redpanda:9092
+      - TOPIC_NAME=postgres_server.public.sport_activities
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    depends_on:
+      - redpanda
+      - debezium
+    networks:
+      - backend
+    restart: unless-stopped
+
+  powerbi_exporter:
+    build:
+      context: .
+      dockerfile: powerbi.Dockerfile
+    volumes:
+      - ./data:/data
+      - ./powerbi_export:/data/powerbi_export
+    environment:
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - SPARK_DRIVER_MEMORY=2g
+      - SPARK_EXECUTOR_MEMORY=2g
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    depends_on:
+      - spark_consumer
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - monitoring
+      - backend
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    networks:
+      - monitoring
+      - backend
+    depends_on:
+      - prometheus
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    command:
+      - '--path.rootfs=/host'
+    pid: host
+    volumes:
+      - '/:/host:ro'
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - monitoring
+      - backend
+
+
+volumes:
+  postgres:
+  pgadmin:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  backend:
+    driver: bridge
+  monitoring:
+    driver: bridge

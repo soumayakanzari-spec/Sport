@@ -1,0 +1,36 @@
+import pandas as pd
+import psycopg2
+
+# Lire les fichiers
+df_rh = pd.read_csv("data/Donnees_RH.csv", sep=';')
+df_sport = pd.read_csv("data/Donnees_Sportive.csv", sep=';')
+
+# Connexion PostgreSQL
+conn = psycopg2.connect(
+    dbname="strava_sim",
+    user="postgres",      #  utilisateur 
+    password="",  # mot de passe
+    host="localhost",
+    port="5432"
+)
+cur = conn.cursor()
+
+
+# Insérer les données RH
+for _, row in df_rh.iterrows():
+    cur.execute("""
+        INSERT INTO rh VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, tuple(row))
+
+# Insérer les données SPORT
+for _, row in df_sport.iterrows():
+    cur.execute("""
+        INSERT INTO sport VALUES (%s, %s)
+    """, tuple(row))
+
+conn.commit()
+cur.close()
+conn.close()
+
+print("Données insérées avec succès.")
+

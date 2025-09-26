@@ -1,0 +1,13 @@
+FROM bitnami/spark:3.4.1
+
+USER root
+
+# Installer curl
+RUN install_packages curl
+
+# Ajouter les connecteurs Kafka
+ENV SPARK_HOME=/opt/bitnami/spark
+
+RUN mkdir -p $SPARK_HOME/jars && \
+    curl -L -o $SPARK_HOME/jars/spark-sql-kafka.jar https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.4.1/spark-sql-kafka-0-10_2.12-3.4.1.jar && \
+    curl -L -o $SPARK_HOME/jars/kafka-clients.jar https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.4.0/kafka-clients-3.4.0.jar

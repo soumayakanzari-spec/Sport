@@ -1,0 +1,99 @@
+{
+  "uid": "specific-containers-health",
+  "title": "Specific Containers Health",
+  "tags": ["docker", "containers", "health", "specific"],
+  "timezone": "browser",
+  "schemaVersion": 30,
+  "version": 2,
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Container State - Specific Containers",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "engine_daemon_container_states_containers{state=~\"running|paused|stopped\", name=~\"postgres_container|debezium_container|redpanda_container\"}",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "Paused", "color": "orange" },
+                "1": { "text": "Running", "color": "green" },
+                "2": { "text": "Stopped", "color": "red" }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 1, "color": "red" }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": ["name", "state", "Value"]
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "name": "Container Name",
+              "state": "Container State",
+              "Value": "Metric Value"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Memory Usage - Specific Containers",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "engine_daemon_engine_memory_bytes{name=~\"postgres_container|debezium_container|redpanda_container\"}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "orientation": "auto",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU Usage - Specific Containers",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "engine_daemon_container_actions_seconds_sum{name=~\"postgres_container|debezium_container|redpanda_container\",action=\"start\"} / engine_daemon_container_actions_seconds_count{name=~\"postgres_container|debezium_container|redpanda_container\",action=\"start\"} * 100",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    }
+  ]
+}

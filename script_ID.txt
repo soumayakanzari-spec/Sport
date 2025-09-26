@@ -1,0 +1,3 @@
+SELECT *
+FROM public.employee_prime
+WHERE id_salarie = '76341';
